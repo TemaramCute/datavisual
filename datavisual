@@ -1,0 +1,258 @@
+# 1. Import library dasar
+import pandas as pd
+import numpy as np
+
+# 2. Import Plotly untuk visualisasi interaktif
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# 3. (Opsional) Jika ingin mount Google Drive, uncomment:
+# from google.colab import drive
+# drive.mount('/content/drive')
+
+# 4. Load dataset (sesuaikan path jika di-drive)
+df = pd.read_csv('/content/Smart_Farming_Crop_Yield_2024.csv')
+
+# 5. Tampilkan 5 baris pertama untuk verifikasi
+df.head()
+
+# 1. Konversi kolom tanggal/waktu
+df['sowing_date']     = pd.to_datetime(df['sowing_date'])
+df['harvest_date']    = pd.to_datetime(df['harvest_date'])
+df['timestamp']       = pd.to_datetime(df['timestamp'])
+
+# 2. Tambahkan durasi penanaman (hari)
+df['harvest_duration_days'] = (df['harvest_date'] - df['sowing_date']).dt.days
+
+# 3. Cek apakah ada missing values
+missing_summary = df.isna().sum()
+print("Ringkasan Missing Values per Kolom:")
+print(missing_summary)
+
+# 4. Jika ada missing values (contoh), kita bisa drop atau imputasi.
+#    Di sini misal kita drop baris yang ada nilai missing di kolom-kolom kritis:
+kolom_kritis = ['farm_id', 'region', 'crop_type', 'soil_moisture_%',
+                'temperature_C', 'yield_kg_per_hectare', 'sensor_id',
+                'timestamp', 'latitude', 'longitude', 'NDVI_index']
+df = df.dropna(subset=kolom_kritis).reset_index(drop=True)
+
+# 5. Pastikan tipe data numeric sudah benar
+numeric_cols = ['soil_moisture_%', 'soil_pH', 'temperature_C',
+                'rainfall_mm', 'humidity_%', 'sunlight_hours',
+                'pesticide_usage_ml', 'total_days',
+                'yield_kg_per_hectare', 'NDVI_index']
+df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+
+# 6. Tampilkan ringkasan data setelah preprocessing
+df.info()
+
+# 3.1 Peta Sebaran Sensor berdasarkan NDVI_index
+fig_map = px.scatter_mapbox(
+    df,
+    lat='latitude',
+    lon='longitude',
+    color='NDVI_index',
+    size='soil_moisture_%',
+    hover_name='farm_id',
+    hover_data={
+        'region': True,
+        'crop_type': True,
+        'NDVI_index': ':.2f',
+        'soil_moisture_%': ':.1f'
+    },
+    zoom=5,
+    height=500,
+    title='Sebaran Sensor Pertanian dengan NDVI Index dan Soil Moisture'
+)
+fig_map.update_layout(mapbox_style='open-street-map')
+fig_map.update_layout(margin={'r':0,'t':40,'l':0,'b':0})
+fig_map.show()
+
+# 3.2 Agregasi harian: rata-rata NDVI dan soil_moisture_%
+df_daily = df.set_index('timestamp').resample('D').agg({
+    'NDVI_index': 'mean',
+    'soil_moisture_%': 'mean',
+    'rainfall_mm': 'sum',
+    'temperature_C': 'mean'
+}).reset_index()
+
+# 3.2.1 Visualisasi NDVI Harian
+fig_ndvi = px.line(
+    df_daily, x='timestamp', y='NDVI_index',
+    title='Trend Rata-rata NDVI per Hari (2024)',
+    labels={'NDVI_index': 'NDVI Index', 'timestamp': 'Tanggal'}
+)
+fig_ndvi.update_layout(height=350, margin={'l':40,'r':20,'t':40,'b':40})
+fig_ndvi.show()
+
+# 3.2.2 Visualisasi Soil Moisture Harian
+fig_sm = px.line(
+    df_daily, x='timestamp', y='soil_moisture_%',
+    title='Trend Rata-rata Soil Moisture (%) per Hari (2024)',
+    labels={'soil_moisture_%': 'Soil Moisture (%)', 'timestamp': 'Tanggal'}
+)
+fig_sm.update_layout(height=350, margin={'l':40,'r':20,'t':40,'b':40})
+fig_sm.show()
+
+# 3.3.1 Rata-rata yield per region
+df_region_yield = (
+    df.groupby('region')['yield_kg_per_hectare']
+      .mean()
+      .reset_index()
+      .sort_values('yield_kg_per_hectare', ascending=False)
+)
+
+fig_yield_region = px.bar(
+    df_region_yield,
+    x='region', y='yield_kg_per_hectare',
+    title='Rata-rata Yield (kg/ha) per Region (2024)',
+    labels={'yield_kg_per_hectare': 'Yield (kg/ha)', 'region': 'Region'}
+)
+fig_yield_region.update_layout(height=400, margin={'l':40,'r':20,'t':50,'b':80})
+fig_yield_region.show()
+
+# 3.3.2 Boxplot Yield berdasarkan Crop Type
+fig_yield_crop = px.box(
+    df, x='crop_type', y='yield_kg_per_hectare',
+    title='Distribusi Yield (kg/ha) berdasarkan Crop Type',
+    labels={'crop_type': 'Tipe Tanaman', 'yield_kg_per_hectare': 'Yield (kg/ha)'}
+)
+fig_yield_crop.update_layout(height=400, margin={'l':40,'r':20,'t':50,'b':80})
+fig_yield_crop.show()
+
+fig_scatter_sm_yield = px.scatter(
+    df,
+    x='soil_moisture_%',
+    y='yield_kg_per_hectare',
+    color='crop_type',
+    trendline='ols',
+    title='Korelasi Soil Moisture (%) vs Yield (kg/ha) per Crop Type',
+    labels={'soil_moisture_%': 'Soil Moisture (%)', 'yield_kg_per_hectare': 'Yield (kg/ha)'}
+)
+fig_scatter_sm_yield.update_layout(height=450, margin={'l':40,'r':20,'t':50,'b':80})
+fig_scatter_sm_yield.show()
+
+# 3.5.1 Proporsi Irrigation Type (pie chart)
+irrigation_counts = df['irrigation_type'].value_counts().reset_index()
+irrigation_counts.columns = ['irrigation_type', 'count']
+
+fig_pie_irrigation = px.pie(
+    irrigation_counts,
+    names='irrigation_type',
+    values='count',
+    title='Proporsi Jenis Irrigation yang Digunakan'
+)
+fig_pie_irrigation.update_traces(textposition='inside', textinfo='percent+label')
+fig_pie_irrigation.update_layout(height=400, margin={'l':40,'r':20,'t':50,'b':50})
+fig_pie_irrigation.show()
+
+# 3.5.2 Proporsi Fertilizer Type (pie chart)
+fert_counts = df['fertilizer_type'].value_counts().reset_index()
+fert_counts.columns = ['fertilizer_type', 'count']
+
+fig_pie_fert = px.pie(
+    fert_counts,
+    names='fertilizer_type',
+    values='count',
+    title='Proporsi Jenis Pupuk yang Digunakan'
+)
+fig_pie_fert.update_traces(textposition='inside', textinfo='percent+label')
+fig_pie_fert.update_layout(height=400, margin={'l':40,'r':20,'t':50,'b':50})
+fig_pie_fert.show()
+
+disease_counts = df.groupby(['crop_type', 'crop_disease_status'])['farm_id'] \
+                   .count().reset_index().rename(columns={'farm_id': 'count'})
+
+fig_bar_disease = px.bar(
+    disease_counts,
+    x='crop_type', y='count',
+    color='crop_disease_status',
+    title='Jumlah Status Penyakit per Crop Type',
+    labels={'count': 'Jumlah Sensor', 'crop_type': 'Crop Type', 'crop_disease_status': 'Status Penyakit'}
+)
+fig_bar_disease.update_layout(barmode='stack', height=400, margin={'l':40,'r':20,'t':50,'b':80})
+fig_bar_disease.show()
+
+# 4. Dashboard Multi-Plot (4 panel)
+from plotly.subplots import make_subplots
+
+# Buat figure dengan 2 baris, 2 kolom
+fig_dash = make_subplots(
+    rows=2, cols=2,
+    specs=[
+        [{"type": "mapbox"}, {"type": "xy"}],
+        [{"type": "xy"}, {"type": "pie"}]
+    ],
+    subplot_titles=(
+        "Sebaran Sensor & NDVI",
+        "Trend NDVI Harian",
+        "Yield per Region",
+        "Proporsi Irrigation"
+    )
+)
+
+# 4.1. Tambahkan peta (subplot row=1, col=1)
+fig_dash.add_trace(
+    go.Scattermapbox(
+        lat=df['latitude'],
+        lon=df['longitude'],
+        mode='markers',
+        marker=go.scattermapbox.Marker(
+            size=7,
+            color=df['NDVI_index'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title="NDVI")
+        ),
+        text=df['farm_id'],
+        hoverinfo='text+lat+lon'
+    ),
+    row=1, col=1
+)
+fig_dash.update_layout(mapbox_style="open-street-map", mapbox=dict(center=go.layout.mapbox.Center(lat=df['latitude'].mean(), lon=df['longitude'].mean()), zoom=5),)
+
+# 4.2. Trend NDVI Harian (row=1, col=2)
+fig_dash.add_trace(
+    go.Scatter(
+        x=df_daily['timestamp'],
+        y=df_daily['NDVI_index'],
+        mode='lines',
+        name='NDVI Harian',
+        line=dict(color='green')
+    ),
+    row=1, col=2
+)
+
+# 4.3. Bar Chart Yield per Region (row=2, col=1)
+fig_dash.add_trace(
+    go.Bar(
+        x=df_region_yield['region'],
+        y=df_region_yield['yield_kg_per_hectare'],
+        name='Yield per Region',
+        marker_color='blue'
+    ),
+    row=2, col=1
+)
+
+# 4.4. Pie Chart Irrigation Type (row=2, col=2)
+fig_dash.add_trace(
+    go.Pie(
+        labels=irrigation_counts['irrigation_type'],
+        values=irrigation_counts['count'],
+        textinfo='percent+label',
+        name='Irrigation Type'
+    ),
+    row=2, col=2
+)
+
+# Update layout keseluruhan
+fig_dash.update_layout(
+    height=900,
+    showlegend=False,
+    title_text="Dashboard Data Sensor Pertanian - Smart Farming 2024",
+    margin={'l':20,'r':20,'t':60,'b':20}
+)
+
+# Tampilkan dashboard
+fig_dash.show()
